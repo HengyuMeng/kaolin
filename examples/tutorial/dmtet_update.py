@@ -41,7 +41,7 @@ if points.shape[0] > 100000: # 如果点云的个数大于0则执行
 
     np.random.shuffle(idx) # 打乱idx列表中数字的顺序
     idx = torch.tensor(idx[:100000], device=points.device, dtype=torch.long) # 将列表转换成张量，以便投入网络中训练
-    points = points[idx] # ？
+    points = points[idx] # 这一步是把之前为数组数据格式的点云转换为张量格式的点云
 
 # The reconstructed object needs to be slightly smaller than the grid to get watertight surface after MT.
 center = (points.max(0)[0] + points.min(0)[0]) / 2
@@ -52,15 +52,43 @@ timelapse.add_pointcloud_batch(category='input',
 # ----------------------------------------------------------------------------------------------------
 
 # Loading the Tetrahedral Grid
+
+# tet_verts是一个torch.tensor对象，它包含了从’…/samples/{}_verts.npz’.format(grid_res)指定的文件中加载的四面体网格的顶点坐标，
+# 它的形状是(N, 3)，其中N是顶点的数量，3是坐标的维度
 tet_verts = torch.tensor(np.load('../samples/{}_verts.npz'.format(grid_res))['data'], dtype=torch.float, device=device)
-tets = torch.tensor(([np.load('../samples/{}_tets_{}.npz'.format(grid_res, i))['data'] for i in range(4)]), dtype=torch.long, device=device).permute(1,0)
+
+# tets是一个torch.tensor对象，它包含了从’…/samples/{}tets{}.npz’.format(grid_res, i)指定的文件中加载的四面体网格的拓扑结构，
+# 它的形状是(M, 4)，其中M是四面体的数量，4是每个四面体由4个顶点组成
+tets = torch.tensor(([np.load('../samples/{}_tets_{}.npz'.format(grid_res, i))['data'] for i in range(4)]),
+                    dtype=torch.long, device=device).permute(1,0)
 print (tet_verts.shape, tets.shape)
+
+# 关于其中函数调用的详细解释：
+# torch.tensor（）是一个用于创建张量对象的函数，它可以接受一个numpy数组，一个列表，或者一个标量作为参数，并返回一个相应的张量对象。
+# 它还可以接受一些可选的参数，例如dtype，device，requires_grad等，来指定张量的数据类型，存储设备，是否需要梯度等属性。
+
+# np.load（）是一个用于加载numpy数组的函数，它可以接受一个文件名或者一个文件对象作为参数，并返回一个numpy数组或者一个字典。
+# 如果文件是一个.npz格式的压缩文件，那么返回的是一个字典，其中包含了文件中存储的多个数组。可以通过字典的键来访问对应的数组，
+# 例如[‘data’]就是访问键为’data’的数组。
+
+# format（）是一个用于格式化字符串的方法，它可以接受一些参数，并将它们插入到字符串中的占位符{}中。
+# 例如’…/samples/{}_verts.npz’.format(grid_res)就是将grid_res这个变量的值替换到{}中，得到一个完整的文件名。
+
+# permute（）是一个用于改变张量维度顺序的方法，它可以接受一些整数作为参数，并按照这些整数指定的顺序重新排列张量的维度。
+# 例如permute(1,0)就是将张量的第0维和第1维交换位置。
+
+# kal.rep.TetMesh（）是一个用于定义四面体网格对象的类，它可以接受两个张量作为参数，分别表示四面体网格的顶点坐标和拓扑结构，并返回一个四面体网格对象。
+# 这个对象有一些属性和方法，可以用来操作和渲染四面体网格。
+
+# ---------------------------------------------------------------------------------------------------
 
 # Initialize model and create optimizer
 model = Decoder(multires=multires).to(device)
 model.pre_train_sphere(1000)
 
+# ---------------------------------------------------------------------------------------------------
 
+# Preparing the Losses and Regularizer
 # Laplacian regularization using umbrella operator (Fujiwara / Desbrun).
 # https://mgarland.org/class/geom04/material/smoothing.pdf
 def laplace_regularizer_const(mesh_verts, mesh_faces):
@@ -92,11 +120,16 @@ def loss_f(mesh_verts, mesh_faces, points, it):
         return chamfer + lap * laplacian_weight
     return chamfer
 
+# --------------------------------------------------------------------------------
 
+# Setting up Optimizer
 vars = [p for _, p in model.named_parameters()]
 optimizer = torch.optim.Adam(vars, lr=lr)
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda x: max(0.0, 10**(-x*0.0002))) # LR decay over time
 
+# ------------------------------------------------------------------------
+
+# training
 for it in range(iterations):
     pred = model(tet_verts) # predict SDF and per-vertex deformation
     sdf, deform = pred[:,0], pred[:,1:]
