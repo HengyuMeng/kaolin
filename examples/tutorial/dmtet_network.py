@@ -40,7 +40,8 @@ class Decoder(torch.nn.Module):
         print("Pre-trained MLP", loss.item())
 
 
-# Positional Encoding from https://github.com/yenchenlin/nerf-pytorch/blob/1f064835d2cca26e4df2d7d130daa39a8cee1795/run_nerf_helpers.py
+# Positional Encoding from
+# https://github.com/yenchenlin/nerf-pytorch/blob/1f064835d2cca26e4df2d7d130daa39a8cee1795/run_nerf_helpers.py
 class Embedder:
     def __init__(self, **kwargs):
         self.kwargs = kwargs

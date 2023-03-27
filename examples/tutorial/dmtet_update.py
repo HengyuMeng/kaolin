@@ -3,6 +3,7 @@ import kaolin
 import numpy as np
 from dmtet_network import Decoder
 
+# 初始化
 # path to the point cloud to be reconstructed
 pcd_path = "../samples/bear_pointcloud.usd"
 # path to the output logs (readable with the training visualizer in the omniverse app)
@@ -10,8 +11,6 @@ logs_path = './logs/'
 
 # We initialize the timelapse that will store USD for the visualization apps
 timelapse = kaolin.visualize.Timelapse(logs_path)
-
-
 # arguments and hyperparameters
 device = 'cuda'
 lr = 1e-3
@@ -20,13 +19,29 @@ iterations = 5000
 save_every = 100
 multires = 2
 grid_res = 128
+# ------------------------------------------------------------------------------
 
+# 加载点云，做归一化操作
+
+# 这个point的数据结构是一个数组，数组的每个元素是一个三维数组，代表每个点云的三维坐标
 points = kaolin.io.usd.import_pointclouds(pcd_path)[0].points.to(device)
-if points.shape[0] > 100000:
-    idx = list(range(points.shape[0]))
-    np.random.shuffle(idx)
-    idx = torch.tensor(idx[:100000], device=points.device, dtype=torch.long)
-    points = points[idx]
+# point.shape()会返回point的形状，有多少行（点云的个数），多少列（在这里一直是3，代表一个点云的三维坐标）
+if points.shape[0] > 100000: # 如果点云的个数大于0则执行
+    # range()的用法：python中range（）函数的用法是生成一个整数序列，可以用于for循环中1。range（）函数可以接受三个参数，
+    # 分别是start，stop和step2。其中，start是可选的，表示序列的起始值，默认为0；stop是必须的，表示序列的终止值，不包含在序列中；
+    # step是可选的，表示序列的步长，默认为1
+
+    # list()的用法：python中list（）函数的用法是创建一个列表对象1。列表对象是一种有序且可变的集合，可以存储各种类型的数据1。
+    # list（）函数可以接受一个可迭代的参数，例如字符串，元组，集合，字典等，或者不传入任何参数，返回一个空列表
+
+    idx = list(range(points.shape[0])) # 得到点云所含点的个数，是列表数据结构
+
+    # np.random.shuffle（）是一个用于打乱数组或序列内容的函数，它会在原地修改数组或序列，不会返回新的对象1。
+    # 这个函数只接受一个参数，即要打乱的数组或序列
+
+    np.random.shuffle(idx) # 打乱idx列表中数字的顺序
+    idx = torch.tensor(idx[:100000], device=points.device, dtype=torch.long) # 将列表转换成张量，以便投入网络中训练
+    points = points[idx] # ？
 
 # The reconstructed object needs to be slightly smaller than the grid to get watertight surface after MT.
 center = (points.max(0)[0] + points.min(0)[0]) / 2
@@ -34,7 +49,9 @@ max_l = (points.max(0)[0] - points.min(0)[0]).max()
 points = ((points - center) / max_l)* 0.9
 timelapse.add_pointcloud_batch(category='input',
                                pointcloud_list=[points.cpu()], points_type = "usd_geom_points")
+# ----------------------------------------------------------------------------------------------------
 
+# Loading the Tetrahedral Grid
 tet_verts = torch.tensor(np.load('../samples/{}_verts.npz'.format(grid_res))['data'], dtype=torch.float, device=device)
 tets = torch.tensor(([np.load('../samples/{}_tets_{}.npz'.format(grid_res, i))['data'] for i in range(4)]), dtype=torch.long, device=device).permute(1,0)
 print (tet_verts.shape, tets.shape)
