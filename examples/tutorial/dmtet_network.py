@@ -15,6 +15,7 @@ class Decoder(torch.nn.Module):
         output_dims: 输出的维度，默认为4，表示输出是一个四元组，包括SDF值和RGB颜色。
         hidden: 网络隐藏层的数量，默认为5。
         multires: 位置编码的频率数量，默认为2。
+
         __init__方法首先检查是否需要使用位置编码，如果是，则调用get_embedder函数来获取一个嵌入函数和一个输入通道数。
         然后，它使用torch.nn.Linear和torch.nn.ReLU来构建一个多层感知机（MLP），并将其赋值给self.net属性。
         """
@@ -34,19 +35,19 @@ class Decoder(torch.nn.Module):
     def forward(self, p):
         """
         parameters:
-            p: 输入的三维坐标，形状为(batch_size, 3)
+            p: 输入的三维坐标，具体来说，接受的是初始化四面体的所有顶点，形状为(batch_size, 3)
 
         forward方法首先检查是否需要使用位置编码，如果是，则调用self.embed_fn来对输入进行嵌入。
         然后，它使用self.net来对嵌入后的输入进行前向传播，并返回输出。
 
         return: out是一个torch.Tensor类型的数据，它的形状为(batch_size, output_dims)，
-                其中output_dims默认为4，表示输出是一个四元组，包括SDF值和RGB颜色
+                其中output_dims默认为4，表示输出是一个四元组，包括SDF值和每个顶点的位移值
         """
         if self.embed_fn is not None:
             # 先让顶点的三维坐标通过嵌入函数后，输出一个更高维度的嵌入向量，从而增强网络的表达能力
             p = self.embed_fn(p)
 
-        # 将具有更多信息的嵌入向量作为神经网络的输入，来得到out
+        # 将具有更多信息的嵌入向量作为神经网络的输入，来得到每个顶点的SDF值以及每个顶点的位移
         out = self.net(p)
         return out
 

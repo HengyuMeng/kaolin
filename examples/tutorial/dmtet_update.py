@@ -21,12 +21,14 @@ multires = 2
 grid_res = 128
 # ------------------------------------------------------------------------------
 
-# 加载点云，做归一化操作
+# 加载点云，做归一化操作,该点云是真实点云，作为label来训练网络
 
 # 这个point的数据结构是一个数组，数组的每个元素是一个三维数组，代表每个点云的三维坐标
 points = kaolin.io.usd.import_pointclouds(pcd_path)[0].points.to(device)
+
 # point.shape()会返回point的形状，有多少行（点云的个数），多少列（在这里一直是3，代表一个点云的三维坐标）
 if points.shape[0] > 100000: # 如果点云的个数大于0则执行
+
     # range()的用法：python中range（）函数的用法是生成一个整数序列，可以用于for循环中1。range（）函数可以接受三个参数，
     # 分别是start，stop和step2。其中，start是可选的，表示序列的起始值，默认为0；stop是必须的，表示序列的终止值，不包含在序列中；
     # step是可选的，表示序列的步长，默认为1
@@ -46,7 +48,10 @@ if points.shape[0] > 100000: # 如果点云的个数大于0则执行
 # The reconstructed object needs to be slightly smaller than the grid to get watertight surface after MT.
 center = (points.max(0)[0] + points.min(0)[0]) / 2
 max_l = (points.max(0)[0] - points.min(0)[0]).max()
-points = ((points - center) / max_l)* 0.9
+
+# 真实点云，作为label来训练网络
+points = ((points - center) / max_l) * 0.9
+
 timelapse.add_pointcloud_batch(category='input',
                                pointcloud_list=[points.cpu()], points_type = "usd_geom_points")
 # ----------------------------------------------------------------------------------------------------
@@ -54,7 +59,7 @@ timelapse.add_pointcloud_batch(category='input',
 # Loading the Tetrahedral Grid
 
 # tet_verts是一个torch.tensor对象，它包含了从’…/samples/{}_verts.npz’.format(grid_res)指定的文件中加载的四面体网格的顶点坐标，
-# 它的形状是(N, 3)，其中N是顶点的数量，3是坐标的维度
+# 它的形状是(V, 3)，其中V是顶点的数量，3是坐标的维度
 tet_verts = torch.tensor(np.load('../samples/{}_verts.npz'.format(grid_res))['data'], dtype=torch.float, device=device)
 
 # tets是一个torch.tensor对象，它包含了从’…/samples/{}tets{}.npz’.format(grid_res, i)指定的文件中加载的四面体网格的拓扑结构，
@@ -95,30 +100,29 @@ def laplace_regularizer_const(mesh_verts, mesh_faces):
     """
     parameters:
         mesh_verts:mesh_verts是一个张量，表示网格的顶点坐标，它的形状是(V, 3)，其中V是顶点的数量，3是坐标的维度
-        mesh_faces:mesh_faces是一个张量，表示网格的面，它的形状是(F, 3)，其中F是面的数量，3是每个面的顶点数（假设都是三角形）
+        mesh_faces:mesh_faces是一个张量，表示网格的面，它的形状是(M, 3)，其中M是面的数量，3是每个面的顶点数（假设都是三角形）
 
         mesh_faces中的每个元素是一个整数，表示对应的顶点在mesh_verts中的索引。
         例如，如果mesh_faces[0] = [1, 2, 3]，那么第一个面由mesh_verts1, mesh_verts2, mesh_verts3三个顶点组成。
 
-    首先，初始化两个零张量term和norm，它们的形状和mesh_verts相同。
-    然后，根据mesh_faces，获取每个三角形面的三个顶点v0, v1, v2。
-    接着，使用scatter_add_函数，将每个顶点与其邻居顶点的差累加到term中，将每个顶点的邻居数累加到norm中。
-    最后，将term除以norm（避免除以零），得到每个顶点的拉普拉斯坐标
-
     它的主要思想是计算每个顶点的拉普拉斯坐标，即顶点与其邻居顶点的平均值的差，然后计算这些坐标的平方和，作为正则化项。
     这样做的目的是使网格保持局部平滑性，减少噪声和扭曲。
     """
+    # 初始化两个零张量term和norm，它们的形状和mesh_verts相同。
     term = torch.zeros_like(mesh_verts)
     norm = torch.zeros_like(mesh_verts[..., 0:1])
 
+    # 根据mesh_faces，获取每个三角形面的三个顶点v0, v1, v2。
     v0 = mesh_verts[mesh_faces[:, 0], :]
     v1 = mesh_verts[mesh_faces[:, 1], :]
     v2 = mesh_verts[mesh_faces[:, 2], :]
 
+    # 使用scatter_add_函数，将每个顶点与其邻居顶点的差累加到term中，将每个顶点的邻居数累加到norm中。
     term.scatter_add_(0, mesh_faces[:, 0:1].repeat(1,3), (v1 - v0) + (v2 - v0))
     term.scatter_add_(0, mesh_faces[:, 1:2].repeat(1,3), (v0 - v1) + (v2 - v1))
     term.scatter_add_(0, mesh_faces[:, 2:3].repeat(1,3), (v0 - v2) + (v1 - v2))
 
+    # 将term除以norm（避免除以零），得到每个顶点的拉普拉斯坐标
     two = torch.ones_like(v0) * 2.0
     norm.scatter_add_(0, mesh_faces[:, 0:1], two)
     norm.scatter_add_(0, mesh_faces[:, 1:2], two)
@@ -126,6 +130,7 @@ def laplace_regularizer_const(mesh_verts, mesh_faces):
 
     term = term / torch.clamp(norm, min=1.0)
 
+    # 返回拉普拉斯正则项
     return torch.mean(term**2)
 
 
@@ -169,11 +174,16 @@ scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda x: max
 
 # training
 for it in range(iterations):
-    pred = model(tet_verts) # predict SDF and per-vertex deformation
+
+    # 把初始化的四面体网格投入到模型中，来预测每个顶点的SDF值与每个顶点的位移
+    pred = model(tet_verts)
     sdf, deform = pred[:,0], pred[:,1:]
     verts_deformed = tet_verts + torch.tanh(deform) / grid_res # constraint deformation to avoid flipping tets
+
+    # 通过kaolin提供的API来从SDF值中提取出显示表面，然后把表面的信息数据投入到损失函数中，
+    # 在损失函数中，会对模型预测的网格进行点云采样，然后根据采样点云与label计算损失，来进行反向传播更新参数
     mesh_verts, mesh_faces = kaolin.ops.conversions.marching_tetrahedra\
-        (verts_deformed.unsqueeze(0), tets, sdf.unsqueeze(0)) # running MT (batched) to extract surface mesh
+        (verts_deformed.unsqueeze(0), tets, sdf.unsqueeze(0))
     mesh_verts, mesh_faces = mesh_verts[0], mesh_faces[0]
 
     loss = loss_f(mesh_verts, mesh_faces, points, it)
