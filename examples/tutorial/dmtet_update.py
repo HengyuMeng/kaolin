@@ -23,26 +23,20 @@ grid_res = 128
 
 # 加载点云，做归一化操作,该点云是真实点云，作为label来训练网络
 
-# 这个point的数据结构是一个数组，数组的每个元素是一个三维数组，代表每个点云的三维坐标
+# 这个point的数据结构是一个数组，数组的大小（行数）是点云的个数，
+# 数组的每个元素是一个三维数组，代表每个点云的三维坐标，这里加载了label（熊的点云）
 points = kaolin.io.usd.import_pointclouds(pcd_path)[0].points.to(device)
 
-# point.shape()会返回point的形状，有多少行（点云的个数），多少列（在这里一直是3，代表一个点云的三维坐标）
-if points.shape[0] > 100000: # 如果点云的个数大于0则执行
+if points.shape[0] > 100000: # 如果点云的个数大于100000则执行
 
-    # range()的用法：python中range（）函数的用法是生成一个整数序列，可以用于for循环中1。range（）函数可以接受三个参数，
-    # 分别是start，stop和step2。其中，start是可选的，表示序列的起始值，默认为0；stop是必须的，表示序列的终止值，不包含在序列中；
-    # step是可选的，表示序列的步长，默认为1
+    # 得到点云所含点的个数，是列表数据结构
+    idx = list(range(points.shape[0]))
 
-    # list()的用法：python中list（）函数的用法是创建一个列表对象1。列表对象是一种有序且可变的集合，可以存储各种类型的数据1。
-    # list（）函数可以接受一个可迭代的参数，例如字符串，元组，集合，字典等，或者不传入任何参数，返回一个空列表
+    # 打乱idx列表中数字的顺序，方便之后随机选取100000个点云进行重建
+    np.random.shuffle(idx)
 
-    idx = list(range(points.shape[0])) # 得到点云所含点的个数，是列表数据结构
-
-    # np.random.shuffle（）是一个用于打乱数组或序列内容的函数，它会在原地修改数组或序列，不会返回新的对象1。
-    # 这个函数只接受一个参数，即要打乱的数组或序列
-
-    np.random.shuffle(idx) # 打乱idx列表中数字的顺序
-    idx = torch.tensor(idx[:100000], device=points.device, dtype=torch.long) # 将列表转换成张量，以便投入网络中训练
+    # 只选取点云中的100000个进行重建将列表转换成张量，以便投入网络中训练
+    idx = torch.tensor(idx[:100000], device=points.device, dtype=torch.long)
     points = points[idx] # 这一步是把之前为数组数据格式的点云转换为张量格式的点云
 
 # The reconstructed object needs to be slightly smaller than the grid to get watertight surface after MT.
@@ -67,25 +61,6 @@ tet_verts = torch.tensor(np.load('../samples/{}_verts.npz'.format(grid_res))['da
 tets = torch.tensor(([np.load('../samples/{}_tets_{}.npz'.format(grid_res, i))['data'] for i in range(4)]),
                     dtype=torch.long, device=device).permute(1,0)
 print (tet_verts.shape, tets.shape)
-
-# 关于其中函数调用的详细解释：
-# torch.tensor（）是一个用于创建张量对象的函数，它可以接受一个numpy数组，一个列表，或者一个标量作为参数，并返回一个相应的张量对象。
-# 它还可以接受一些可选的参数，例如dtype，device，requires_grad等，来指定张量的数据类型，存储设备，是否需要梯度等属性。
-
-# np.load（）是一个用于加载numpy数组的函数，它可以接受一个文件名或者一个文件对象作为参数，并返回一个numpy数组或者一个字典。
-# 如果文件是一个.npz格式的压缩文件，那么返回的是一个字典，其中包含了文件中存储的多个数组。可以通过字典的键来访问对应的数组，
-# 例如[‘data’]就是访问键为’data’的数组。
-
-# format（）是一个用于格式化字符串的方法，它可以接受一些参数，并将它们插入到字符串中的占位符{}中。
-# 例如’…/samples/{}_verts.npz’.format(grid_res)就是将grid_res这个变量的值替换到{}中，得到一个完整的文件名。
-
-# permute（）是一个用于改变张量维度顺序的方法，它可以接受一些整数作为参数，并按照这些整数指定的顺序重新排列张量的维度。
-# 例如permute(1,0)就是将张量的第0维和第1维交换位置。
-
-# kal.rep.TetMesh（）是一个用于定义四面体网格对象的类，它可以接受两个张量作为参数，分别表示四面体网格的顶点坐标和拓扑结构，并返回一个四面体网格对象。
-# 这个对象有一些属性和方法，可以用来操作和渲染四面体网格。
-
-# ---------------------------------------------------------------------------------------------------
 
 # Initialize model and create optimizer
 model = Decoder(multires=multires).to(device)
@@ -176,6 +151,11 @@ scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda x: max
 for it in range(iterations):
 
     # 把初始化的四面体网格投入到模型中，来预测每个顶点的SDF值与每个顶点的位移
+    # 这个脚本只是给了如何用DMTet将点云重建为网格，而没有其他的可控制的生成内容
+    # 如果要让DMTet根据不同的点云输入做不同3D网格的生成，需要增加一些部分：
+    # 1.增加一个模型，根据输入的点云，提取出特征，并将它解码为初始的四面体网格
+    # （这个四面体网格包含了该点云的形状信息，四面体的顶点有初始的SDF值，表示该顶点与输入点云的位置关系）
+    # 2.之后让DMTet模型根据这个初始四面体网格（包含了输入的点云信息）去重建出网格（通过预测四面体顶点的位移和表面的细分）
     pred = model(tet_verts)
     sdf, deform = pred[:,0], pred[:,1:]
     verts_deformed = tet_verts + torch.tanh(deform) / grid_res # constraint deformation to avoid flipping tets
