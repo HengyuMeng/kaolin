@@ -18,6 +18,7 @@ class Decoder(torch.nn.Module):
         self.net = torch.nn.Sequential(*net)
 
     def forward(self, p):
+
         if self.embed_fn is not None:
             p = self.embed_fn(p)
         out = self.net(p)

@@ -92,6 +92,22 @@ model.pre_train_sphere(1000)
 # Laplacian regularization using umbrella operator (Fujiwara / Desbrun).
 # https://mgarland.org/class/geom04/material/smoothing.pdf
 def laplace_regularizer_const(mesh_verts, mesh_faces):
+    """
+    parameters:
+        mesh_verts:mesh_verts是一个张量，表示网格的顶点坐标，它的形状是(V, 3)，其中V是顶点的数量，3是坐标的维度
+        mesh_faces:mesh_faces是一个张量，表示网格的面，它的形状是(F, 3)，其中F是面的数量，3是每个面的顶点数（假设都是三角形）
+
+        mesh_faces中的每个元素是一个整数，表示对应的顶点在mesh_verts中的索引。
+        例如，如果mesh_faces[0] = [1, 2, 3]，那么第一个面由mesh_verts1, mesh_verts2, mesh_verts3三个顶点组成。
+
+    首先，初始化两个零张量term和norm，它们的形状和mesh_verts相同。
+    然后，根据mesh_faces，获取每个三角形面的三个顶点v0, v1, v2。
+    接着，使用scatter_add_函数，将每个顶点与其邻居顶点的差累加到term中，将每个顶点的邻居数累加到norm中。
+    最后，将term除以norm（避免除以零），得到每个顶点的拉普拉斯坐标
+
+    它的主要思想是计算每个顶点的拉普拉斯坐标，即顶点与其邻居顶点的平均值的差，然后计算这些坐标的平方和，作为正则化项。
+    这样做的目的是使网格保持局部平滑性，减少噪声和扭曲。
+    """
     term = torch.zeros_like(mesh_verts)
     norm = torch.zeros_like(mesh_verts[..., 0:1])
 
@@ -112,11 +128,33 @@ def laplace_regularizer_const(mesh_verts, mesh_faces):
 
     return torch.mean(term**2)
 
+
 def loss_f(mesh_verts, mesh_faces, points, it):
+    """
+    这个函数是用来计算网格和点云之间的损失函数的
+
+    parameters
+        mesh_verts: 一个张量，表示网格的顶点坐标，它的形状是(V, 3)，其中V是顶点的数量，3是坐标的维度
+        mesh_faces: 一个张量，表示网格的面，它的形状是(F, 3)，其中F是面的数量，3是每个面的顶点数（假设都是三角形）
+                    mesh_faces中的每个元素是一个整数，表示对应的顶点在mesh_verts中的索引
+        points: 一个张量，表示点云，它的形状是(P, 3)，其中P是点的数量，3是坐标的维度
+        it: 一个整数，表示迭代次数
+
+    return: 一个标量，表示网格和点云之间的距离损失和正则化损失之和。距离损失是网格表面和点云之间的chamfer distance，
+            正则化损失是网格顶点的拉普拉斯正则化项
+    """
+
+    # 这段代码是用来从网格上采样50000个点，作为预测的点云。它的输入是网格的顶点和面，它的输出是一个张量，表示采样的点云，它的形状是(50000, 3)。
     pred_points = kaolin.ops.mesh.sample_points(mesh_verts.unsqueeze(0), mesh_faces, 50000)[0][0]
+
+    # 这段代码是用来计算预测的点云和真实的点云之间的chamfer distance，作为距离损失。
+    # 它的输入是两个张量，表示预测的点云和真实的点云，它的输出是一个标量，表示两个点云之间的平均距离。
     chamfer = kaolin.metrics.pointcloud.chamfer_distance(pred_points.unsqueeze(0), points.unsqueeze(0)).mean()
+
     if it > iterations//2:
+        # 计算拉普拉斯正则项
         lap = laplace_regularizer_const(mesh_verts, mesh_faces)
+        # 返回距离损失和拉普拉斯正则项的总和（拉普拉斯正则项有超参数调制）
         return chamfer + lap * laplacian_weight
     return chamfer
 
@@ -134,7 +172,8 @@ for it in range(iterations):
     pred = model(tet_verts) # predict SDF and per-vertex deformation
     sdf, deform = pred[:,0], pred[:,1:]
     verts_deformed = tet_verts + torch.tanh(deform) / grid_res # constraint deformation to avoid flipping tets
-    mesh_verts, mesh_faces = kaolin.ops.conversions.marching_tetrahedra(verts_deformed.unsqueeze(0), tets, sdf.unsqueeze(0)) # running MT (batched) to extract surface mesh
+    mesh_verts, mesh_faces = kaolin.ops.conversions.marching_tetrahedra\
+        (verts_deformed.unsqueeze(0), tets, sdf.unsqueeze(0)) # running MT (batched) to extract surface mesh
     mesh_verts, mesh_faces = mesh_verts[0], mesh_faces[0]
 
     loss = loss_f(mesh_verts, mesh_faces, points, it)
@@ -143,7 +182,8 @@ for it in range(iterations):
     optimizer.step()
     scheduler.step()
     if (it) % save_every == 0 or it == (iterations - 1):
-        print ('Iteration {} - loss: {}, # of mesh vertices: {}, # of mesh faces: {}'.format(it, loss, mesh_verts.shape[0], mesh_faces.shape[0]))
+        print ('Iteration {} - loss: {}, # of mesh vertices: {}, # of mesh faces: {}'.
+               format(it, loss, mesh_verts.shape[0], mesh_faces.shape[0]))
         # save reconstructed mesh
         timelapse.add_mesh_batch(
             iteration=it+1,
